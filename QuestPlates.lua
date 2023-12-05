@@ -1,387 +1,209 @@
---------------------
--- ICON SETTINGS
-
--- Settings can be referenced by typing "QuestPlateSettings." followed by the name of the setting.
--- For example, to move the icon 10 pixels down, you can type the following into the chat:
---   /run QuestPlateSettings.OffsetY = -10
--- To move the icon from the left to the right of the nameplate, you can type this:
---   /run QuestPlateSettings.AnchorPoint = 'LEFT'; QuestPlateSettings.RelativeTo = 'RIGHT'
-
--- After changing your settings, you can type /reload to save and apply them
--- If you wish to wipe out any changes you've made and return to the default settings, you can type:
---   /run QuestPlateSettings = nil
--- And then /reload your ui
-
-QuestPlateSettings = {
-	AnchorPoint = 'RIGHT', -- Point of icon to anchor to nameplate (CENTER, LEFT, RIGHT, TOP, BOTTOM)
-	RelativeTo = 'LEFT', -- Point of nameplate to anchor icon to (CENTER, LEFT, RIGHT, TOP, BOTTOM)
-	OffsetX = 0, -- Horizontal offset for icon (from anchor point)
-	OffsetY = 0, -- Vertical offset for icon
-	IconScale = 1, -- Scale for icon
-}
-
--- Uncomment these lines if you want to enable them, or set to 0 to turn them off
--- SetCVar('showQuestUnitCircles', 1) -- Enables subtle glow under quest mobs
--- SetCVar('UnitNameFriendlySpecialNPCName', 1) -- Show name for quest objectives, even out of range of nameplates
-
--- END OF SETTINGS
---------------------
-
-local addonName, addon = ...
-
-local E = addon:Eve()
-
--- function E:VARIABLES_LOADED()
-	-- SetCVar('showQuestTrackingTooltips', '1') -- Required for this addon to function, don't turn this off
--- end
-
-local TextureAtlases = {
-	['item'] = 'Banker', -- bag icon, you have to loot something for this quest
-	--['monster'] = '', -- you must kill or interact with units for this quest
-}
-
--- C_TaskQuest.GetQuestsForPlayerByMapID(GetCurrentMapAreaID())
-local ActiveWorldQuests = {
-	-- [questName] = questID ?
-}
-
-do
-	function E:PLAYER_LOGIN()
-		-- local areaID = GetCurrentMapAreaID()
-		local uiMapID = C_Map.GetBestMapForUnit('player')
-		if uiMapID then
-			for k, task in pairs(C_TaskQuest.GetQuestsForPlayerByMapID(uiMapID) or {}) do
-				if task.inProgress then
-					-- track active world quests
-					local questID = task.questId
-					local questName = C_TaskQuest.GetQuestInfoByQuestID(questID)
-					if questName then
-						-- print(k, questID, questName)
-						ActiveWorldQuests[ questName ] = questID
-					end
-				end
-			end
-		end
+--血条右侧显示箭头
+hooksecurefunc("CompactUnitFrame_UpdateSelectionHighlight", function(frame)
+if frame:IsForbidden() then return end
+if string.match(frame.unit,"nameplate") then
+	if not frame.arrow then
+		frame.arrow = frame.healthBar:CreateTexture(nil, "ARTWORK")
+		frame.arrow:SetTexture("Interface\\Addons\\!MyZXC\\MyPlates\\media\\arrorH.tga")		-- 图标路径
+		frame.arrow:SetPoint("right", frame.healthBar, "right", 45, 0)				-- 右方箭头位置
+		frame.arrow:SetSize(50, 50)										-- 箭头大小
+		frame.arrow:Hide()
 	end
-
-	function E:QUEST_ACCEPTED(questLogIndex, questID, ...)
-		if questID and C_QuestLog.IsQuestTask(questID) then
-			-- print('TASK_QUEST_ACCEPTED', questID, questLogIndex, GetQuestLogTitle(questLogIndex))
-			local questName = C_TaskQuest.GetQuestInfoByQuestID(questID)
-			if questName then
-				ActiveWorldQuests[ questName ] = questID
-			end
-		else
-			-- print('QUEST_ACCEPTED', questID, questLogIndex, GetQuestLogTitle(questLogIndex))
-		end
-		E:UNIT_QUEST_LOG_CHANGED()
-	end
-	
-	function E:QUEST_REMOVED(questID)
-		local questName = C_TaskQuest.GetQuestInfoByQuestID(questID)
-		if questName and ActiveWorldQuests[ questName ] then
-			ActiveWorldQuests[ questName ] = nil
-			-- print('TASK_QUEST_REMOVED', questID, questName)
-			-- get task progress when it's updated to display on the nameplate
-			-- C_TaskQuest.GetQuestProgressBarInfo
-		end
-		E:UNIT_QUEST_LOG_CHANGED()
-	end
-	
-	function E:QUEST_WATCH_LIST_CHANGED(questID, added)
-		E:QUEST_ACCEPTED(nil, questID)
-	end
-end
-
-local OurName = UnitName('player')
---local QuestPlateTooltip = CreateFrame('GameTooltip', 'QuestPlateTooltip', nil, 'GameTooltipTemplate')
-QuestLogIndex = {} -- [questName] = questLogIndex, this is to "quickly" look up quests from its name in the tooltip
-
-function GetQuestProgress(unitID)
-	-- TODO: Refactor this mess
-	if not C_QuestLog.UnitIsRelatedToActiveQuest(unitID) then return end
-
-	local tooltipData = C_TooltipInfo.GetUnit(unitID)
-	local progressGlob -- concatenated glob of quest text
-	local questType -- 1 for player, 2 for group
-	local objectiveCount = 0
-	local questTexture -- if usable item
-	local questLogIndex -- should generally be set, index usable with questlog functions
-	local questID
-	for i = 3, #tooltipData.lines do
-		local line = tooltipData.lines[i]
-		TooltipUtil.SurfaceArgs(line)
-
-		if line.type == 17 and line.id then -- Tooltip line is a quest header..?
-			--if not text then return end
-			local text, objectiveType, finished = GetQuestObjectiveInfo(line.id, 1, false)
-			questID = questID or line.id or text and ActiveWorldQuests[ text ]
-			--local playerName, progressText = strmatch(text, '^(.-)(.+)$') -- nil or '' if 1 is missing but 2 is there
-			local playerName = ""
-			local progressText = text
-			local isQuestText = not not progressText
-			
-			-- todo: if multiple entries are present, ONLY read the quest objectives for the player
-			-- if a name is listed in the pattern then we must be in a group
-			if playerName and playerName ~= '' and playerName ~= OurName then -- quest is for another group member
-				if not questType then
-					questType = 2
-				end
-			else
-				if isQuestText then
-					local x, y = strmatch(progressText, '(%d+)/(%d+)')
-					if x and y then
-						local numLeft = y - x
-						if numLeft > objectiveCount then -- track highest number of objectives
-							objectiveCount = numLeft
-						end
-					else
-						local progress = tonumber(strmatch(progressText, '([%d%.]+)%%')) -- tooltip actually contains progress %
-						if progress and progress <= 100 then
-							local questID = ActiveWorldQuests[ text ] -- not a guarantee
-							local questType = 3
-							return text, questType, ceil(100 - progress), questID
-						end
-					end
-					--local x, y = strmatch(progressText, '(%d+)/(%d+)$')
-					if not x or (x and y and x ~= y) then
-						progressGlob = progressGlob and progressGlob .. '\n' .. progressText or progressText
-					end
-				elseif ActiveWorldQuests[text] then
-					local questID = ActiveWorldQuests[ text ]
-					local progress = C_TaskQuest.GetQuestProgressBarInfo(questID) -- or GetQuestProgressBarPercent(questID) -- not sure what the difference is between these functions
-					if progress then
-						local questType = 3 -- progress bar
-						return text, questType, ceil(100 - progress), questID
-					end
-				elseif QuestLogIndex[text] then
-					questLogIndex = QuestLogIndex[text]
-				end
-			end
-		end
-	end
-	
-	return progressGlob, progressGlob and 1 or questType, objectiveCount, questLogIndex, questID
-end
-
-local QuestPlates = {} -- [plate] = f
-function E:OnNewPlate(f, plate)
-	local frame = CreateFrame('frame', nil, f)
-	frame:Hide()
-	frame:SetAllPoints(f)
-	QuestPlates[plate] = frame
-	
-	local icon = frame:CreateTexture(nil, nil, nil, 0)
-	icon:SetSize(28, 22)
-	icon:SetTexture('Interface/QuestFrame/AutoQuest-Parts')
-	icon:SetTexCoord(0.30273438, 0.41992188, 0.015625, 0.953125)
-	icon:SetPoint(QuestPlateSettings.AnchorPoint or 'RIGHT', frame, QuestPlateSettings.RelativeTo or 'LEFT', (QuestPlateSettings.OffsetX or 0) / (QuestPlateSettings.IconScale or 1), (QuestPlateSettings.OffsetY or 0) / (QuestPlateSettings.IconScale or 1))
-	frame:SetScale(QuestPlateSettings.IconScale or 1)
-	frame.jellybean = icon
-	
-	local itemTexture = frame:CreateTexture(nil, nil, nil, 1)
-	itemTexture:SetPoint('TOPRIGHT', icon, 'BOTTOMLEFT', 12, 12)
-	itemTexture:SetSize(16, 16)
-	itemTexture:SetMask('Interface/CharacterFrame/TempPortraitAlphaMask')
-	itemTexture:Hide()
-	frame.itemTexture = itemTexture
-	
-	-- Loot icon, display if mob needs to be looted for quest item
-	local lootIcon = frame:CreateTexture(nil, nil, nil, 1)
-	lootIcon:SetAtlas('Banker')
-	lootIcon:SetSize(16, 16)
-	lootIcon:SetPoint('TOPLEFT', icon, 'BOTTOMRIGHT', -12, 12)
-	lootIcon:Hide()
-	frame.lootIcon = lootIcon
-	
-	local iconText = frame:CreateFontString(nil, 'OVERLAY', 'SystemFont_Outline_Small')
-	iconText:SetPoint('CENTER', icon, 0.8, 0)
-	iconText:SetShadowOffset(1, -1)
-	--iconText:SetText(math.random(22))
-	iconText:SetTextColor(1,.82,0)
-	frame.iconText = iconText
-	
-	-- todo: add setting for displaying quest text again
-	local questText = frame:CreateFontString(nil, 'BACKGROUND', 'GameFontWhiteSmall')
-	questText:SetPoint('TOP', frame, 'BOTTOM')
-	questText:SetShadowOffset(1, -1)
-	questText:Hide()
-	frame.questText = questText
-	
-	local qmark = frame:CreateTexture(nil, 'OVERLAY')
-	qmark:SetSize(28, 28)
-	qmark:SetPoint('CENTER', icon)
-	qmark:SetTexture('Interface/WorldMap/UI-WorldMap-QuestIcon')
-	qmark:SetTexCoord(0, 0.56, 0.5, 1)
-	qmark:SetAlpha(0)
-	
-	local duration = 1
-	local group = qmark:CreateAnimationGroup()
-	local alpha = group:CreateAnimation('Alpha')
-	alpha:SetOrder(1)
-	alpha:SetFromAlpha(0)
-	alpha:SetToAlpha(1)
-	alpha:SetDuration(0)
-	
-	local translation = group:CreateAnimation('Translation')
-	translation:SetOrder(1)
-	translation:SetOffset(0, 20)
-	translation:SetDuration(duration)
-	translation:SetSmoothing('OUT')
-	
-	local alpha2 = group:CreateAnimation('Alpha')
-	alpha2:SetOrder(1)
-	alpha2:SetFromAlpha(1)
-	alpha2:SetToAlpha(0)
-	alpha2:SetDuration(duration)
-	alpha2:SetSmoothing('OUT')
-	
-	frame.ani = group
-	
-	frame:HookScript('OnShow', function(self)
-		group:Play()
-	end)
-	
-end
-
-local function UpdateQuestIcon(plate, unitID)
-	local Q = QuestPlates[plate]
-	local unitID = unitID or addon:GetUnitForPlate(plate)
-	if not Q then return end
-	
-	local scenarioName, currentStage, numStages, flags, _, _, _, xp, money, scenarioType, _, textureKitID = C_Scenario.GetInfo()
-	local inChallengeMode = (scenarioType == LE_SCENARIO_TYPE_CHALLENGE_MODE)
-	local guid = UnitGUID(unitID)
-	if inChallengeMode and guid then -- C_MythicPlus.IsMythicPlusActive() and guid then
-		Q:Hide()
-		return
-	end
-	
-	local progressGlob, questType, objectiveCount, questLogIndex, questID = GetQuestProgress(unitID)
-	if progressGlob and questType ~= 2 then
-		Q.questText:SetText(progressGlob or '')
-		
-		if questType == 3 then -- todo: progress bar
-			Q.iconText:SetText(objectiveCount > 0 and objectiveCount or '?')
-		else
-			Q.iconText:SetText(objectiveCount > 0 and objectiveCount or '?')
-		end
-
-		if questType == 1 then
-			Q.jellybean:SetDesaturated(false)
-			Q.iconText:SetTextColor(1, .82, 0)
-		elseif questType == 2 then
-			Q.jellybean:SetDesaturated(true)
-			Q.iconText:SetTextColor(1, 1, 1)
-		elseif questType == 3 then
-			Q.jellybean:SetDesaturated(false)
-			Q.iconText:SetTextColor(0.2, 1, 1)
-		end
-		Q.itemTexture:Hide()
-		Q.lootIcon:Hide()
-		if questLogIndex or questID then
-			if questID then
-				for i = 1, 10 do
-					local text, objectiveType, finished = GetQuestObjectiveInfo(questID, i, false)
-					if not text then break end
-					if not finished and (objectiveType == 'item' or objectiveType == 'object') then
-						Q.lootIcon:Show()
-					end
-				end
-			else
-				local info = C_QuestLog.GetInfo(questLogIndex)
-				if info then
-					for i = 1, GetNumQuestLeaderBoards(questLogIndex) or 0 do
-						local text, objectiveType, finished = GetQuestObjectiveInfo(info.questID, i, false)
-						if not finished and (objectiveType == 'item' or objectiveType == 'object') then
-							Q.lootIcon:Show()
-						end
-					end
-				end
-			end
-			
-			if questLogIndex then
-				local link, itemTexture, charges, showItemWhenComplete = GetQuestLogSpecialItemInfo(questLogIndex)
-				if link and itemTexture then
-					Q.itemTexture:SetTexture(itemTexture)
-					Q.itemTexture:Show()
-				else
-					Q.itemTexture:Hide()
-				end
-			end
-		end
-		
-		if not Q:IsVisible() then
-			Q.ani:Stop()
-			Q:Show()
-			Q.ani:Play()
-		end
-		--Q:Show()
+	if UnitIsUnit(frame.displayedUnit, "target") then
+		frame.arrow:Show()
 	else
-		Q:Hide()
-	end	
+		frame.arrow:Hide()
+	end
+	if UnitIsUnit("player", frame.unit) and frame.arrow then
+		frame.arrow:Hide()
+	end
 end
-
-function E:OnPlateShow(f, plate, unitID)
-	UpdateQuestIcon(plate, unitID)
+end)
+--[[
+--斩杀分割线/dump IsPlayerSpell(30455)
+local zhansha = 0 --斩杀变色和斩杀分割线用
+local function QSZS(unit)	--骑士超度邪恶斩杀影月墓地老一小怪
+	if not IsPlayerSpell(10326) then return false end
+	local NPHP = UnitHealth(unit)
+	local NPHPMax = UnitHealthMax(unit)
+	local NPHPBB = NPHP/NPHPMax*100 or 0	
+	local guid = UnitGUID(unit)
+	local _, _, _, _, _, id = strsplit("-", guid or "")
+	if id == 75966 and NPHPBB <= 30 then
+		return true
+	end
 end
+]]
+--名字变色列表1
+local npc1 = {
+[186361] = true,	--10.0铭文周长任务,铭文马都没了
+[164803] = true,	--测试-奥利波斯宝库首席守护者
+--10.2第三赛季
+[206064] = true,	--永恒黎明 凝结时刻
+[206140] = true,	--永恒黎明 凝结时光 
+[205691] = true,	--永恒黎明 伊律迪孔的造物
+[204918] = true,	--永恒黎明 伊律迪孔的造物
+[201223] = true,	--永恒黎明 永恒暮光大法师 
+[199748] = true,	--永恒黎明 时间线掠夺者
+[208698] = true,	--永恒黎明 永恒裂隙法师
+[206230] = true,	--永恒黎明 永恒分化者
+[205337] = true,	--永恒黎明 永恒曲时者
+[131685] = true,	--庄园 符文信徒
+[131677] = true,	--庄园 毒心织符者
+[131812] = true,	--庄园 毒心诱魂者
+[131850] = true,	--庄园 疯狂的生存专家
+[131812] = true,	--庄园 毒心诱魂者
+[98370] = true,		--黑鸦堡垒 幽灵顾问
+[98275] = true,		--黑鸦堡垒 复活的弓箭手
+[101839] = true,	--黑鸦堡垒 复活的小伙伴
+[102788] = true,	--黑鸦堡垒 魔怨支配者
+[98813] = true,		--黑鸦堡垒 血气地狱犬
+[127315] = true,	--阿塔达萨 复生图腾
+[122972] = true,	--阿塔达萨 达萨莱占卜师
+[128434] = true,	--阿塔达萨 飨宴的啸天龙
+[129553] = true,	--阿塔达萨 恐龙统领吉什奥
+[122969] = true,	--阿塔达萨 赞枢利巫医
+[81819] = true,		--永茂林地 永茂博学者
+[84767] = true,		--永茂林地 扭曲的憎恶 
+[83893] = true,		--永茂林地 塑地者特鲁
+[84990] = true,		--永茂林地 疯狂的奥法师
+[84957] = true,		--永茂林地 腐烂的炎术士
+[84400] = true,		--永茂林地 多瘤古树
+[95769] = true,		--永茂林地 精神错乱的尖啸夜枭
+[99358] = true,		--永茂林地 腐心树妖
+[100527] = true,	--永茂林地 骇火小鬼
+[41096] = true,		--潮汐王座 纳兹夏尔神谕者
+[212775] = true,	--潮汐王座 无面先知
+[40634] = true,		--潮汐王座 纳兹夏尔风暴女巫
+[44404] = true,		--潮汐王座 纳兹夏尔冰霜女巫
+[213806] = true,	--潮汐王座 秽斑
+}
+--名字变色列表3
+local npc3 = {
+[165251] = true,	--仙林2号boss仙狐
+[179733] = true,	--鱼串
+[183671] = true,	--安度因大怪
+[186696] = true,	--奥达曼 2号图腾
+[193799] = true,	--山谷 吟腐图腾
+[193352] = true,	--山谷 老一图腾
+[190426] = true,	--山谷 腐朽图腾
+}
+--名字变色列表 PVP
+local green = {
+    [119052] = true, 		-- 战旗
+    [5925] = true, 		    -- 根基
+    [5913] = true,		    -- 战栗
+    [53006] = true, 		-- 灵魂链接
+    [59764] = true, 		-- 治疗之潮
+    [105427] = true,		-- 天怒
+    [61245] = true,		    -- 电能
+    [105451] = true,		-- 反击
+    [166523] = true,		-- 墓钟
+    [179867] = true,		-- 静电立场
+    [101398] = true,		-- 灵能魔
+    [179193] = true, 		-- 邪能方尖碑
+    [179733] = true, 		-- 鱼串
+    [135002] = true,        -- 恶魔暴君
+}
+--名字隐藏列表
+local hide = {
+    [95072] = true,		-- 巨型土元素
+    [5394] = true, 		-- 治疗之泉 测试
+}
 
-QuestObjectiveStrings = {}
-local function CacheQuestIndexes()
-	wipe(QuestLogIndex)
-	for i = 1, C_QuestLog.GetNumQuestLogEntries() do	
-		-- for i = 1, GetNumQuestLogEntries() do if not select(4,GetQuestLogTitle(i)) and select(11,GetQuestLogTitle(i)) then QuestLogPushQuest(i) end end
-		local info = C_QuestLog.GetInfo(i)		
-		if info and not info.isHeader then
-			QuestLogIndex[info.title] = i
-			for objectiveID = 1, GetNumQuestLeaderBoards(i) or 0 do
-				local objectiveText, objectiveType, finished, numFulfilled, numRequired = GetQuestObjectiveInfo(info.questID, objectiveID, false)
-				if objectiveText then
-					QuestObjectiveStrings[ info.title .. objectiveText ] = {info.questID, objectiveID}
-				end
-			end
+--血条变色
+local zhansha = 0
+local function PCbarcolor(unitFrame)
+	if unitFrame:IsForbidden() then return end
+	if not unitFrame.unit then return end
+	if UnitIsUnit(unitFrame.unit,"player") then return end
+	if not UnitIsPlayer(unitFrame.unit) and not UnitIsTapDenied(unitFrame.unit) then
+		if IsPlayerSpell(384581) then  		--奥术弹幕
+			zhansha = 35
+		elseif IsPlayerSpell(269644) then  	--灼烧之触天赋
+			zhansha = 30
+		elseif IsPlayerSpell(53351) then  	--猎人夺命射击
+			zhansha = 20
+		else
+			zhansha = 0
 		end
+		local threat = UnitThreatSituation("player", unitFrame.unit) or 0
+		local reaction = UnitReaction(unitFrame.unit, "player")
+		local name = UnitName(unitFrame.unit)
+		local me = UnitName("player")
+		local pt = UnitIsUnit(unitFrame.unit.."target", me)
+		local Cur = UnitHealth(unitFrame.unit)
+		local Max = UnitHealthMax(unitFrame.unit)
+		local Per = Cur/Max*100 or 0
+		local guid = UnitGUID(unitFrame.unit)
+		local _, _, _, _, _, id = strsplit("-", guid or "") 
+		local combat = UnitAffectingCombat(unitFrame.unit)
+		local ispp = UnitPlayerControlled(unitFrame.unit.."target") and not UnitIsPlayer(unitFrame.unit.."target") and "TANK" == UnitGroupRolesAssigned("player")
+	    if id == "120651" or id == "204560" then --邪能炸药 绿色
+			unitFrame.healthBar:SetStatusBarColor(0,1,0)	
+--		elseif green[tonumber(id)] then	---- 特殊血条 绿色
+--			unitFrame.healthBar:SetStatusBarColor(0,1,0)
+--		elseif npc1[tonumber(id)] then	--npc1 偏黄色
+--			unitFrame.healthBar:SetStatusBarColor(1,.95,.56)
+--      elseif hide[tonumber(id)] then  --隐藏血条
+--          unitFrame.healthBar:Hide()
+--		elseif npc3[tonumber(id)] then	--npc3 偏黄色
+--			unitFrame.healthBar:SetStatusBarColor(1,.95,.56)
+		elseif ((id == "190366")or (id == "195399")) and pt == true then	--190366注能小青蛙--195399注能老二召唤的小青蛙
+			unitFrame.healthBar:SetStatusBarColor(0.3,0,0.6)	--目标是你但是无仇恨预警
+		elseif ispp then
+            unitFrame.healthBar:SetStatusBarColor(0,0,0)	    -- 当你是坦克并且仇恨是玩家宠物或者土元素
+--		elseif QSZS(unitFrame.unit) then 
+--			unitFrame.healthBar:SetStatusBarColor(1,0,1)	    --骑士超度邪恶斩杀
+		elseif threat == 3 then
+            unitFrame.healthBar:SetStatusBarColor(0.3,0,0.6)	-- 仇恨是你 颜色
+		elseif threat == 2 then
+            unitFrame.healthBar:SetStatusBarColor(0.2,0.3,0.6)	--仇恨降低  颜色
+        elseif threat == 1 then      
+            unitFrame.healthBar:SetStatusBarColor(1,0.5,0)	    -- 高仇恨  颜色
+--		elseif reaction and reaction >= 5 then
+--			unitFrame.healthBar:SetStatusBarColor(0, 1, 0)		-- 友方npc 绿色	
+--		elseif Per <=  zhansha then 
+--			unitFrame.healthBar:SetStatusBarColor(1,0,1)	    --斩杀
+		elseif UnitIsUnit(unitFrame.unit, "target") then
+			unitFrame.healthBar:SetStatusBarColor(0,1,1)		-- 你的目标 浅蓝色
+		elseif combat == true then
+			unitFrame.healthBar:SetStatusBarColor(1,0,0)	  	--战斗状态 红色
+		elseif reaction and reaction == 4 then
+			unitFrame.healthBar:SetStatusBarColor(1, 1, 0)		-- 中立怪 黄色
+        else
+			unitFrame.healthBar:SetStatusBarColor(1,0,0)       	--其他，红色
+        end
 	end
-	
-	for plate, f in pairs(addon:GetActiveNameplates()) do
-		UpdateQuestIcon(plate, f._unitID)
+end
+
+local barcolor = CreateFrame("Frame")
+barcolor:RegisterEvent("NAME_PLATE_UNIT_ADDED")
+barcolor:RegisterEvent("UNIT_HEALTH")
+barcolor:RegisterEvent("UNIT_AURA")
+barcolor:SetScript("OnEvent", function(self, event,frame)
+	if string.match(frame,"nameplate") then
+		local namePlate = C_NamePlate.GetNamePlateForUnit(frame,false)
+		if not namePlate then return end
+		local unitFrame = namePlate.UnitFrame
+		PCbarcolor(unitFrame)
 	end
-end
+end)
 
-function E:UNIT_QUEST_LOG_CHANGED(unitID)
-	if unitID == 'player' then
-		CacheQuestIndexes()
-	else	
-		for plate in pairs(addon:GetActiveNameplates()) do
-			UpdateQuestIcon(plate)
-		end
+hooksecurefunc("CompactUnitFrame_UpdateSelectionHighlight", function(frame)
+	if not frame.unit then return end
+	if frame.unit:lower():match("nameplate") then
+		PCbarcolor(frame)
 	end
-end
+end)
 
-function E:QUEST_LOG_UPDATE()
-	CacheQuestIndexes()
-end
-E:UnregisterEvent('QUEST_LOG_UPDATE')
-
-function E:PLAYER_LEAVING_WORLD()
-	E:UnregisterEvent('QUEST_LOG_UPDATE')
-end
-
-function E:PLAYER_ENTERING_WORLD()
-	E:RegisterEvent('QUEST_LOG_UPDATE')
-end
-
--- Reanchor any existing nameplate icons after settings load
-function E:ADDON_LOADED(loadedAddon)
-	if loadedAddon == addonName then
-		for plate, f in pairs(addon:GetAllNameplates()) do
-			local frame = QuestPlates[plate]
-			if frame then
-				frame.jellybean:ClearAllPoints()
-				frame.jellybean:SetPoint(QuestPlateSettings.AnchorPoint or 'RIGHT', frame, QuestPlateSettings.RelativeTo or 'LEFT', (QuestPlateSettings.OffsetX or 0) / (QuestPlateSettings.IconScale or 1), (QuestPlateSettings.OffsetY or 0) / (QuestPlateSettings.IconScale or 1))
-				frame:SetScale(QuestPlateSettings.IconScale or 1)
-			end
-		end	
-		self:UnregisterEvent("ADDON_LOADED")
+hooksecurefunc("CompactUnitFrame_UpdateHealthColor", function(frame)
+	if not frame.unit then return end
+	if string.match(frame.unit,"nameplate") then
+		PCbarcolor(frame)
+		--collectgarbage()
 	end
-end
+end)
+
+
+
